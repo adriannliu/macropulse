@@ -21,6 +21,7 @@ import {
   generateDemoHistory,
 } from './storage';
 import { TrendCharts } from './components/TrendCharts';
+import { AIMealModal } from './components/AIMealModal';
 import { smartDiscoverMacros, type NutritionSearchResult } from './nutritionApi';
 import {
   Calendar,
@@ -120,6 +121,7 @@ export default function App() {
     () => localStorage.getItem('mp_gemini_key') || ''
   );
   const [keyInput, setKeyInput] = useState<string>(geminiKey);
+  const [isAIMealModalOpen, setIsAIMealModalOpen] = useState(false);
 
   // File import ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -336,6 +338,23 @@ export default function App() {
     setNewFoodF('');
     setLookupCandidates([]);
     showNotification(`Saved and logged "${custom.name}"`);
+  };
+
+  // Confirm and log foods parsed from AI Natural Language
+  const handleConfirmAILog = (loggedFoods: LoggedFood[], newFoods: FoodItem[]) => {
+    // Merge any new discovered foods into library
+    setFoods((prev) => {
+      const existingNames = new Set(prev.map((f) => f.name.toLowerCase()));
+      const toAdd = newFoods.filter((f) => !existingNames.has(f.name.toLowerCase()));
+      return [...toAdd, ...prev];
+    });
+
+    // Add logged foods into active day
+    updateActiveRecord((prev) => ({
+      items: [...prev.items, ...loggedFoods],
+    }));
+
+    showNotification(`Logged ${loggedFoods.length} items from AI!`);
   };
 
   // Auto-Balance via Cramer's Rule
@@ -559,6 +578,13 @@ export default function App() {
               </div>
 
               <button
+                onClick={() => setIsAIMealModalOpen(true)}
+                className="px-3 py-1.5 text-xs font-mono font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg transition flex items-center gap-1.5 shadow-md shadow-indigo-950"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                AI Log Meal
+              </button>
+              <button
                 onClick={handleAutoBalance}
                 className="px-3 py-1.5 text-xs font-mono bg-indigo-600 hover:bg-indigo-500 text-white rounded transition"
               >
@@ -576,6 +602,21 @@ export default function App() {
           <main className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Left Column: Food Library & Custom Food Creator */}
             <section className="lg:col-span-5 space-y-4">
+              {/* Quick AI Natural Language Callout */}
+              <button
+                type="button"
+                onClick={() => setIsAIMealModalOpen(true)}
+                className="w-full py-2.5 px-3.5 bg-gradient-to-r from-indigo-950/80 via-purple-950/60 to-indigo-950/80 border border-indigo-700/60 hover:border-indigo-500 rounded-xl text-xs font-mono text-indigo-200 hover:text-white flex items-center justify-between transition group shadow-md shadow-indigo-950/40"
+              >
+                <span className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-300 group-hover:rotate-12 transition-transform" />
+                  <span className="font-semibold text-white">AI Natural Language Meal Logger</span>
+                </span>
+                <span className="text-[10px] bg-indigo-800/80 px-2 py-0.5 rounded text-indigo-200 font-bold">
+                  Voice or Text →
+                </span>
+              </button>
+
               <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
                 <div className="flex justify-between items-center mb-3">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
@@ -1202,6 +1243,17 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* AI Natural Language Meal Logger Modal */}
+      <AIMealModal
+        isOpen={isAIMealModalOpen}
+        onClose={() => setIsAIMealModalOpen(false)}
+        defaultMeal={selectedMeal}
+        foodLibrary={foods}
+        geminiKey={geminiKey}
+        onSaveGeminiKey={handleSaveGeminiKey}
+        onConfirmLog={handleConfirmAILog}
+      />
     </div>
   );
 }
