@@ -22,6 +22,8 @@ import {
 } from './storage';
 import { TrendCharts } from './components/TrendCharts';
 import { AIMealModal } from './components/AIMealModal';
+import { AuthModal } from './components/AuthModal';
+import { useAuthSession } from './auth';
 import { smartDiscoverMacros, type NutritionSearchResult } from './nutritionApi';
 import {
   Calendar,
@@ -40,6 +42,7 @@ import {
   Key,
   Check,
   Utensils,
+  Cloud,
 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -59,6 +62,10 @@ type FoodCategory = typeof CATEGORIES[number];
 export default function App() {
   // Navigation View
   const [activeTab, setActiveTab] = useState<'logger' | 'trends' | 'data'>('logger');
+
+  // AWS Authentication & Cloud Session
+  const { email: userEmail, isAuthenticated, logout } = useAuthSession();
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   // User Profile
   const [profile, setProfile] = useState<UserProfile>(() => loadProfile());
@@ -480,6 +487,30 @@ export default function App() {
 
         {/* Tab Switcher & Quick Actions */}
         <div className="flex items-center gap-2">
+          {isAuthenticated ? (
+            <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg">
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span className="text-xs font-mono text-slate-300 truncate max-w-[130px]" title={userEmail || 'Account'}>
+                {userEmail || 'Account'}
+              </span>
+              <button
+                onClick={() => logout()}
+                className="text-[10px] font-mono text-slate-500 hover:text-rose-400 ml-1 transition"
+                title="Sign Out"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setIsAuthModalOpen(true)}
+              className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 text-xs font-mono font-medium flex items-center gap-1.5 transition"
+            >
+              <Cloud className="w-3.5 h-3.5 text-indigo-400" />
+              Sign In / AWS Sync
+            </button>
+          )}
+
           <div className="bg-slate-950 p-1 rounded-lg border border-slate-800 flex items-center gap-1">
             <button
               onClick={() => setActiveTab('logger')}
@@ -1253,6 +1284,15 @@ export default function App() {
         geminiKey={geminiKey}
         onSaveGeminiKey={handleSaveGeminiKey}
         onConfirmLog={handleConfirmAILog}
+      />
+
+      {/* AWS Cognito Auth & Cloud Sync Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onLoginSuccess={(email) => {
+          showNotification(`Signed in as ${email}!`);
+        }}
       />
     </div>
   );
