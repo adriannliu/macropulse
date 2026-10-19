@@ -20,18 +20,70 @@ export interface ParsedMealResult {
 }
 
 /**
- * Gemini 1.5 Flash Natural Language Meal Parser
+ * Natural Language Meal Parser:
+ * 1. Tries serverless backend endpoint (/api/parse-meal) using global GEMINI_API_KEY
+ * 2. If no server key or offline, tries client-provided Gemini key
+ * 3. Fallback to offline / USDA heuristic
  */
 export async function parseMealWithAI(
   text: string,
-  apiKey: string,
+  userApiKey?: string,
   defaultMeal: 'breakfast' | 'lunch' | 'dinner' | 'snacks' = 'lunch'
 ): Promise<ParsedMealResult> {
-  const cleanKey = apiKey.trim();
-  if (!cleanKey) {
-    throw new Error('Please enter your Google Gemini API key in Settings.');
+  const cleanPrompt = text.trim();
+  if (!cleanPrompt) {
+    throw new Error('Please describe what you ate first.');
   }
 
+  // 1. Try Vercel Serverless Function first (Uses global GEMINI_API_KEY)
+  try {
+    const res = await fetch('/api/parse-meal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: cleanPrompt,
+        defaultMeal,
+        userKey: userApiKey ? userApiKey.trim() : undefined,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+        return {
+          meal: data.meal || defaultMeal,
+          items: data.items,
+          rawText: cleanPrompt,
+        };
+      }
+    } else {
+      const errData = await res.json().catch(() => ({}));
+      // If server has no key and user provided one, continue to direct client call
+      if (errData.error === 'NO_GLOBAL_KEY' && (!userApiKey || userApiKey.trim().length < 10)) {
+        throw new Error('NO_KEY_CONFIGURED');
+      }
+    }
+  } catch (err: any) {
+    if (err.message === 'NO_KEY_CONFIGURED') throw err;
+    console.warn('Serverless /api/parse-meal unavailable, checking client fallback...', err);
+  }
+
+  // 2. Direct client fallback if user provided a key
+  if (userApiKey && userApiKey.trim().length > 10) {
+    return directClientGeminiParse(cleanPrompt, userApiKey.trim(), defaultMeal);
+  }
+
+  throw new Error('NO_KEY_CONFIGURED');
+}
+
+/**
+ * Direct client-side Gemini fallback
+ */
+async function directClientGeminiParse(
+  text: string,
+  apiKey: string,
+  defaultMeal: 'breakfast' | 'lunch' | 'dinner' | 'snacks'
+): Promise<ParsedMealResult> {
   const prompt = `You are a world-class clinical sports nutritionist and calorie tracking assistant.
 A user describes what they ate in natural language:
 "${text}"
@@ -68,7 +120,7 @@ Respond ONLY with a valid JSON object matching this schema, no markdown codebloc
   ]
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -84,9 +136,6 @@ Respond ONLY with a valid JSON object matching this schema, no markdown codebloc
 
   if (!res.ok) {
     const errorText = await res.text();
-    if (res.status === 400 || res.status === 403) {
-      throw new Error('Invalid Gemini API Key or permission denied.');
-    }
     throw new Error(`Gemini API error (${res.status}): ${errorText.slice(0, 100)}`);
   }
 
@@ -139,7 +188,7 @@ export async function parseMealOffline(
   else if (lower.includes('dinner')) meal = 'dinner';
   else if (lower.includes('snack')) meal = 'snacks';
 
-  // Split by common delimiters: "and", ",", "with", "plus", "+"
+  // Split by common delimiters
   const segments = text
     .replace(/\b(for breakfast|for lunch|for dinner|for snack|for a snack|today|i had|i ate|ate|had)\b/gi, '')
     .split(/,|\band\b|\bwith\b|\bplus\b|\+/i)
@@ -154,7 +203,9 @@ export async function parseMealOffline(
 
     // Estimate grams from numbers/units
     let grams = 100;
-    let qtyMatch = segLower.match(/(\d+(?:\.\d+)?)\s*(g|grams|gram|kg|oz|ounce|ounces|lbs|scoop|scoops|cup|cups|tbsp|tablespoon|slices?|eggs?|pieces?|pcs)/i);
+    const qtyMatch = segLower.match(
+      /(\d+(?:\.\d+)?)\s*(g|grams|gram|kg|oz|ounce|ounces|lbs|scoop|scoops|cup|cups|tbsp|tablespoon|slices?|eggs?|pieces?|pcs)/i
+    );
 
     if (qtyMatch) {
       const num = parseFloat(qtyMatch[1]);
@@ -170,7 +221,6 @@ export async function parseMealOffline(
       else if (unit.startsWith('egg')) grams = Math.round(num * 50);
       else if (unit.startsWith('piece') || unit.startsWith('pc')) grams = Math.round(num * 40);
     } else {
-      // Natural language multipliers
       if (segLower.includes('half')) grams = 75;
       else if (segLower.includes('two') || segLower.includes('2')) grams = 120;
       else if (segLower.includes('three') || segLower.includes('3')) grams = 180;
@@ -179,9 +229,11 @@ export async function parseMealOffline(
       else if (segLower.includes('handful')) grams = 35;
     }
 
-    // Try matching in foodLibrary
     const cleanFoodName = seg
-      .replace(/(\d+(?:\.\d+)?)\s*(g|grams|gram|kg|oz|ounce|ounces|lbs|scoop|scoops|cup|cups|tbsp|tablespoon|slices?|eggs?|pieces?|pcs)/gi, '')
+      .replace(
+        /(\d+(?:\.\d+)?)\s*(g|grams|gram|kg|oz|ounce|ounces|lbs|scoop|scoops|cup|cups|tbsp|tablespoon|slices?|eggs?|pieces?|pcs)/gi,
+        ''
+      )
       .replace(/\b(a|an|the|of|some|fresh|cooked|steamed|grilled|crispy|large|medium|small|boiled)\b/gi, '')
       .trim();
 
@@ -202,7 +254,6 @@ export async function parseMealOffline(
         explanation: `Matched from library (${grams}g)`,
       });
     } else {
-      // Try USDA lookup for segment
       try {
         const usda = await searchUSDANutrition(cleanFoodName || seg);
         if (usda.length > 0) {
@@ -220,10 +271,9 @@ export async function parseMealOffline(
           continue;
         }
       } catch {
-        // Ignore USDA error in offline fallback
+        // Fallback
       }
 
-      // Default fallback
       items.push({
         id: `offline_fallback_${Date.now()}_${idx}`,
         name: cleanFoodName.charAt(0).toUpperCase() + cleanFoodName.slice(1) || seg,
@@ -244,9 +294,6 @@ export async function parseMealOffline(
   };
 }
 
-/**
- * Converts parsed items to standard LoggedFood items
- */
 export function convertParsedToLoggedFoods(
   parsed: ParsedItem[],
   meal: 'breakfast' | 'lunch' | 'dinner' | 'snacks'

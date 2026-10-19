@@ -128,17 +128,22 @@ export function AIMealModal({
     setErrorMsg(null);
 
     try {
-      if (geminiKey && geminiKey.trim().length > 10) {
-        // AI parse with Gemini
+      // 1. Try AI parse (queries serverless /api/parse-meal with global key, or client key)
+      try {
         const result = await parseMealWithAI(query, geminiKey, defaultMeal);
         setParsedItems(result.items);
         setTargetMeal(result.meal);
-      } else {
-        // Offline / USDA Heuristic Parse
-        const result = await parseMealOffline(query, defaultMeal, foodLibrary);
-        setParsedItems(result.items);
-        setTargetMeal(result.meal);
+        return;
+      } catch (aiErr: any) {
+        if (aiErr.message !== 'NO_KEY_CONFIGURED') {
+          console.warn('AI error, falling back to USDA heuristic', aiErr);
+        }
       }
+
+      // 2. Fallback to USDA / offline parser
+      const result = await parseMealOffline(query, defaultMeal, foodLibrary);
+      setParsedItems(result.items);
+      setTargetMeal(result.meal);
     } catch (err: any) {
       console.error(err);
       setErrorMsg(err.message || 'Failed to parse meal. Please try again.');

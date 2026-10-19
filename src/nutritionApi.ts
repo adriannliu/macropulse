@@ -61,9 +61,7 @@ export async function searchUSDANutrition(query: string): Promise<NutritionSearc
       }
     }
 
-    // Clean up description (title case, strip trailing codes)
     let displayName = item.description || cleanQuery;
-    // Format "CHICKEN, BREAST, MEAT ONLY, COOKED" into clean title
     displayName = displayName
       .toLowerCase()
       .split(',')
@@ -92,13 +90,51 @@ export async function searchUSDANutrition(query: string): Promise<NutritionSearc
 }
 
 /**
- * AI-assisted nutrition estimation using Google Gemini API
+ * AI-assisted nutrition estimation (tries serverless /api/estimate-food first, then client-side)
  */
 export async function estimateWithGemini(
   query: string,
-  apiKey: string
+  apiKey?: string
 ): Promise<NutritionSearchResult> {
-  const prompt = `You are a nutrition database. Provide estimated macronutrients per 100 grams for the food: "${query}".
+  const clean = query.trim();
+
+  // 1. Try serverless endpoint with global key
+  try {
+    const res = await fetch('/api/estimate-food', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: clean,
+        userKey: apiKey ? apiKey.trim() : undefined,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.name) {
+        return {
+          id: data.id || `ai_${Date.now()}`,
+          name: data.name,
+          category: data.category || 'AI Estimated',
+          p: data.p,
+          c: data.c,
+          f: data.f,
+          kcal: Math.round(calcKcal(data.p, data.c, data.f)),
+          defaultGrams: data.defaultGrams || 100,
+          source: 'ai',
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Serverless /api/estimate-food failed, trying direct client...', err);
+  }
+
+  // 2. Direct client fallback
+  if (!apiKey || apiKey.trim().length < 10) {
+    throw new Error('No API key configured for Gemini');
+  }
+
+  const prompt = `You are a nutrition database. Provide estimated macronutrients per 100 grams for the food: "${clean}".
 Respond ONLY with a valid JSON object in this exact schema:
 {
   "name": "Standard food name",
@@ -107,11 +143,7 @@ Respond ONLY with a valid JSON object in this exact schema:
   "c": 0.0,
   "f": 3.5,
   "defaultGrams": 150
-}
-Note:
-- "p", "c", "f" MUST be grams per 100g of the food.
-- "defaultGrams" is a typical realistic single-portion serving in grams (e.g., 100-250g).
-- Respond with pure JSON only, no markdown, no explanation.`;
+}`;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey.trim()}`;
 
@@ -143,7 +175,7 @@ Note:
 
   return {
     id: `ai_${Date.now()}`,
-    name: parsed.name || query,
+    name: parsed.name || clean,
     category: parsed.category || 'AI Estimated',
     p: Math.round(p * 10) / 10,
     c: Math.round(c * 10) / 10,
@@ -196,14 +228,12 @@ export async function smartDiscoverMacros(
   const clean = query.trim();
   if (!clean) return [];
 
-  // If Gemini API key is provided, prefer AI estimation for complex dishes
-  if (geminiKey && geminiKey.trim().length > 10) {
-    try {
-      const aiResult = await estimateWithGemini(clean, geminiKey);
-      return [aiResult];
-    } catch (e) {
-      console.warn('Gemini estimation failed, falling back to USDA', e);
-    }
+  // Try AI (either serverless global key or client key)
+  try {
+    const aiResult = await estimateWithGemini(clean, geminiKey);
+    return [aiResult];
+  } catch (e) {
+    // Continue to USDA
   }
 
   // Try USDA FoodData Central
