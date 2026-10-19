@@ -21,6 +21,7 @@ import {
   generateDemoHistory,
 } from './storage';
 import { TrendCharts } from './components/TrendCharts';
+import { smartDiscoverMacros, type NutritionSearchResult } from './nutritionApi';
 import {
   Calendar,
   ChevronLeft,
@@ -33,7 +34,26 @@ import {
   Scale,
   CheckCircle,
   Database,
+  Search,
+  Loader2,
+  Key,
+  Check,
+  Utensils,
 } from 'lucide-react';
+
+const CATEGORIES = [
+  'All',
+  'Protein',
+  'Seafood',
+  'Dairy & Eggs',
+  'Carbs',
+  'Home-Cooked',
+  'Produce',
+  'Fats',
+  'Custom',
+] as const;
+
+type FoodCategory = typeof CATEGORIES[number];
 
 export default function App() {
   // Navigation View
@@ -45,10 +65,20 @@ export default function App() {
   // Date Navigation
   const [activeDate, setActiveDate] = useState<string>(() => getTodayDate());
 
-  // Food Library
+  // Food Library with custom + default merger
   const [foods, setFoods] = useState<FoodItem[]>(() => {
     const saved = localStorage.getItem('mp_foods');
-    return saved ? JSON.parse(saved) : DEFAULT_FOODS;
+    if (!saved) return DEFAULT_FOODS;
+    try {
+      const parsed: FoodItem[] = JSON.parse(saved);
+      const defaultIds = new Set(DEFAULT_FOODS.map((f) => f.id));
+      const customOnly = parsed.filter(
+        (f) => !defaultIds.has(f.id) || f.category === 'Custom' || f.id.startsWith('custom_')
+      );
+      return [...customOnly, ...DEFAULT_FOODS];
+    } catch {
+      return DEFAULT_FOODS;
+    }
   });
 
   // History Store (keyed by YYYY-MM-DD)
@@ -69,11 +99,12 @@ export default function App() {
 
   const activeItems = activeRecord.items;
 
-  // Active Meal bucket & Search filter
+  // Active Meal bucket & Search & Category filter
   const [selectedMeal, setSelectedMeal] = useState<
     'breakfast' | 'lunch' | 'dinner' | 'snacks'
   >('lunch');
   const [search, setSearch] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<FoodCategory>('All');
 
   // Custom Food Creator State
   const [newFoodName, setNewFoodName] = useState('');
@@ -82,13 +113,21 @@ export default function App() {
   const [newFoodF, setNewFoodF] = useState('');
   const [newFoodGrams, setNewFoodGrams] = useState('100');
 
+  // Auto-lookup state
+  const [isLookingUp, setIsLookingUp] = useState(false);
+  const [lookupCandidates, setLookupCandidates] = useState<NutritionSearchResult[]>([]);
+  const [geminiKey, setGeminiKey] = useState<string>(
+    () => localStorage.getItem('mp_gemini_key') || ''
+  );
+  const [keyInput, setKeyInput] = useState<string>(geminiKey);
+
   // File import ref
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
   const showNotification = (msg: string) => {
     setNotification(msg);
-    setTimeout(() => setNotification(null), 3500);
+    setTimeout(() => setNotification(null), 3800);
   };
 
   // Sync profile to localStorage
@@ -100,6 +139,13 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('mp_foods', JSON.stringify(foods));
   }, [foods]);
+
+  // Sync gemini key
+  const handleSaveGeminiKey = (k: string) => {
+    setGeminiKey(k.trim());
+    localStorage.setItem('mp_gemini_key', k.trim());
+    showNotification('AI API Key saved');
+  };
 
   // Metabolic Targets
   const { bmr, tdee } = useMemo(
@@ -123,6 +169,32 @@ export default function App() {
   const totals = useMemo(() => {
     return calculateDayTotals(activeItems);
   }, [activeItems]);
+
+  // Filtered food list
+  const filteredFoods = useMemo(() => {
+    return foods.filter((food) => {
+      const matchesSearch =
+        food.name.toLowerCase().includes(search.toLowerCase()) ||
+        food.category.toLowerCase().includes(search.toLowerCase());
+      const matchesCategory =
+        selectedCategory === 'All'
+          ? true
+          : selectedCategory === 'Custom'
+          ? food.category === 'Custom' || food.id.startsWith('custom_')
+          : food.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    });
+  }, [foods, search, selectedCategory]);
+
+  // Category counts
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { All: foods.length };
+    for (const f of foods) {
+      const cat = f.id.startsWith('custom_') || f.category === 'Custom' ? 'Custom' : f.category;
+      counts[cat] = (counts[cat] || 0) + 1;
+    }
+    return counts;
+  }, [foods]);
 
   // Helper to mutate active day record
   const updateActiveRecord = (
@@ -182,6 +254,67 @@ export default function App() {
     setProfile((p) => ({ ...p, weightKg: newWeight }));
   };
 
+  // Execute Auto-Lookup from USDA / AI
+  const handleTriggerAutoLookup = async (queryText: string) => {
+    const query = queryText.trim();
+    if (!query) {
+      showNotification('Enter a food name to auto-discover macros');
+      return;
+    }
+
+    setIsLookingUp(true);
+    setLookupCandidates([]);
+
+    try {
+      const results = await smartDiscoverMacros(query, geminiKey, foods);
+      if (results.length === 0) {
+        showNotification(`No nutrition data found for "${query}"`);
+      } else if (results.length === 1) {
+        applyCandidate(results[0]);
+        showNotification(`Auto-filled: ${results[0].p}P · ${results[0].c}C · ${results[0].f}F (${results[0].source.toUpperCase()})`);
+      } else {
+        setLookupCandidates(results);
+        showNotification(`Found ${results.length} matches from USDA FoodData Central`);
+      }
+    } catch (err) {
+      console.error(err);
+      showNotification('Auto-lookup failed. Check connection.');
+    } finally {
+      setIsLookingUp(false);
+    }
+  };
+
+  // Apply candidate to custom food inputs
+  const applyCandidate = (cand: NutritionSearchResult) => {
+    setNewFoodName(cand.name);
+    setNewFoodP(String(cand.p));
+    setNewFoodC(String(cand.c));
+    setNewFoodF(String(cand.f));
+    setNewFoodGrams(String(cand.defaultGrams));
+    setLookupCandidates([]);
+  };
+
+  // Direct 1-click log from candidate
+  const handleDirectLogCandidate = (cand: NutritionSearchResult) => {
+    const food: FoodItem = {
+      id: cand.id,
+      name: cand.name,
+      category: cand.category,
+      p: cand.p,
+      c: cand.c,
+      f: cand.f,
+      defaultGrams: cand.defaultGrams,
+    };
+    // Save to user custom library if not exists
+    if (!foods.some((f) => f.name.toLowerCase() === cand.name.toLowerCase())) {
+      setFoods((prev) => [food, ...prev]);
+    }
+    addFoodToLog(food, food.defaultGrams);
+    setLookupCandidates([]);
+    setNewFoodName('');
+    showNotification(`Logged ${cand.defaultGrams}g of "${cand.name}"`);
+  };
+
   // Custom food submission
   const handleCreateCustomFood = (e: React.FormEvent) => {
     e.preventDefault();
@@ -201,7 +334,8 @@ export default function App() {
     setNewFoodP('');
     setNewFoodC('');
     setNewFoodF('');
-    showNotification(`Added and logged "${custom.name}"`);
+    setLookupCandidates([]);
+    showNotification(`Saved and logged "${custom.name}"`);
   };
 
   // Auto-Balance via Cramer's Rule
@@ -210,7 +344,7 @@ export default function App() {
     const remC = Math.max(0, targetC - totals.c);
     const remF = Math.max(0, targetF - totals.f);
 
-    const fP = foods.find((f) => f.id === 'chicken') || foods[0];
+    const fP = foods.find((f) => f.id === 'chicken_breast' || f.id === 'chicken') || foods[0];
     const fC = foods.find((f) => f.id === 'white_rice') || foods[3];
     const fF = foods.find((f) => f.id === 'avocado') || foods[9];
 
@@ -311,11 +445,12 @@ export default function App() {
       <header className="max-w-7xl mx-auto flex flex-wrap justify-between items-center border-b border-slate-800 pb-4 mb-6 gap-4">
         <div>
           <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-bold tracking-tight text-white">
+            <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+              <Utensils className="w-6 h-6 text-emerald-400" />
               MacroPulse
             </h1>
             <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/70 px-2 py-0.5 rounded border border-emerald-800">
-              v2.1 Persistent Linear Engine
+              v2.2 Auto-Nutrition Engine
             </span>
           </div>
           <p className="text-xs text-slate-400 font-mono mt-1">
@@ -357,7 +492,7 @@ export default function App() {
               }`}
             >
               <Database className="w-3.5 h-3.5" />
-              Data
+              Data & Settings
             </button>
           </div>
         </div>
@@ -444,7 +579,7 @@ export default function App() {
               <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
                 <div className="flex justify-between items-center mb-3">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
-                    Food Library (Per 100g)
+                    Food Library ({filteredFoods.length} items)
                   </h2>
                   <select
                     value={selectedMeal}
@@ -462,29 +597,96 @@ export default function App() {
                   </select>
                 </div>
 
-                <input
-                  type="text"
-                  placeholder="Filter foods (e.g., braised beef, millet, tofu)..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:border-indigo-500"
-                />
+                {/* Category Filter Pills */}
+                <div className="flex gap-1.5 overflow-x-auto pb-2.5 mb-2.5 scrollbar-thin">
+                  {CATEGORIES.map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedCategory(cat)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-mono whitespace-nowrap transition flex items-center gap-1 ${
+                        selectedCategory === cat
+                          ? 'bg-emerald-600 text-white font-bold'
+                          : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                      }`}
+                    >
+                      {cat}
+                      {categoryCounts[cat] !== undefined && (
+                        <span className="text-[9px] opacity-70">
+                          ({categoryCounts[cat]})
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
 
-                <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
-                  {foods
-                    .filter((f) =>
-                      f.name.toLowerCase().includes(search.toLowerCase())
-                    )
-                    .map((food) => (
+                <div className="relative mb-3">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="Search 65+ foods (chicken, rice, dumplings, avocado)..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* Quick Auto-Lookup Banner if searched query not in library or to query USDA */}
+                {search.trim().length > 1 && (
+                  <div className="mb-3 p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-800/60 flex items-center justify-between gap-2">
+                    <div className="text-xs text-indigo-300">
+                      <span className="font-semibold">Looking for &quot;{search}&quot;?</span>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        Query official USDA FoodData Central & AI
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setNewFoodName(search);
+                        handleTriggerAutoLookup(search);
+                      }}
+                      disabled={isLookingUp}
+                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-mono flex items-center gap-1.5 whitespace-nowrap transition disabled:opacity-50"
+                    >
+                      {isLookingUp ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3 h-3 text-amber-300" />
+                      )}
+                      ✨ Auto-Lookup
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+                  {filteredFoods.length === 0 ? (
+                    <div className="text-center py-6 text-slate-500 text-xs">
+                      No foods matched &quot;{search}&quot;.
+                      <button
+                        onClick={() => {
+                          setNewFoodName(search);
+                          handleTriggerAutoLookup(search);
+                        }}
+                        className="block mx-auto mt-2 text-indigo-400 hover:text-indigo-300 underline font-mono"
+                      >
+                        ✨ Search USDA Database for &quot;{search}&quot;
+                      </button>
+                    </div>
+                  ) : (
+                    filteredFoods.map((food) => (
                       <div
                         key={food.id}
                         className="flex justify-between items-center p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 hover:border-slate-700"
                       >
                         <div>
-                          <div className="text-sm font-medium text-slate-200">
-                            {food.name}
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium text-slate-200">
+                              {food.name}
+                            </span>
+                            <span className="text-[9px] font-mono uppercase px-1 py-0.2 rounded bg-slate-800/80 text-slate-400">
+                              {food.category}
+                            </span>
                           </div>
-                          <div className="text-xs font-mono text-slate-400">
+                          <div className="text-xs font-mono text-slate-400 mt-0.5">
                             {Math.round(calcKcal(food.p, food.c, food.f))} kcal |{' '}
                             <span className="text-emerald-400">{food.p}g P</span> ·{' '}
                             <span className="text-amber-400">{food.c}g C</span> ·{' '}
@@ -498,64 +700,175 @@ export default function App() {
                           + {food.defaultGrams}g
                         </button>
                       </div>
-                    ))}
+                    ))
+                  )}
                 </div>
               </div>
 
-              {/* Custom Food Form */}
+              {/* Custom Food Form with Auto-Fill Feature */}
               <form
                 onSubmit={handleCreateCustomFood}
                 className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3"
               >
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Add Custom Food (Per 100g)
-                </h3>
-                <input
-                  type="text"
-                  placeholder="Food name (e.g., Homemade Dumplings)"
-                  value={newFoodName}
-                  onChange={(e) => setNewFoodName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-1.5 text-sm"
-                  required
-                />
-                <div className="grid grid-cols-4 gap-2">
-                  <input
-                    type="number"
-                    step="0.1"
-                    placeholder="P (g)"
-                    value={newFoodP}
-                    onChange={(e) => setNewFoodP(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono"
-                  />
-                  <input
-                    type="number"
-                    step="0.1"
-                    placeholder="C (g)"
-                    value={newFoodC}
-                    onChange={(e) => setNewFoodC(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono"
-                  />
-                  <input
-                    type="number"
-                    step="0.1"
-                    placeholder="F (g)"
-                    value={newFoodF}
-                    onChange={(e) => setNewFoodF(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono"
-                  />
-                  <input
-                    type="number"
-                    placeholder="Portion(g)"
-                    value={newFoodGrams}
-                    onChange={(e) => setNewFoodGrams(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono"
-                  />
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    Smart Custom Food (Auto-Fill)
+                  </h3>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    USDA & AI Powered
+                  </span>
                 </div>
+
+                {/* Name input with Auto-Fill button */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter any food (e.g. Salmon fillet, Greek yogurt, Dumplings)..."
+                    value={newFoodName}
+                    onChange={(e) => setNewFoodName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !newFoodP && newFoodName.trim()) {
+                        e.preventDefault();
+                        handleTriggerAutoLookup(newFoodName);
+                      }
+                    }}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleTriggerAutoLookup(newFoodName)}
+                    disabled={isLookingUp || !newFoodName.trim()}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-mono flex items-center gap-1.5 transition disabled:opacity-50 whitespace-nowrap"
+                    title="Automatically find nutrition facts from official USDA database"
+                  >
+                    {isLookingUp ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    )}
+                    Auto-Fill
+                  </button>
+                </div>
+
+                {/* Candidate Selection Dropdown if multiple found */}
+                {lookupCandidates.length > 0 && (
+                  <div className="p-2.5 rounded-lg bg-slate-950 border border-indigo-800/80 space-y-2">
+                    <div className="text-[11px] font-mono text-indigo-300 flex justify-between items-center">
+                      <span>Select matching USDA food item:</span>
+                      <button
+                        type="button"
+                        onClick={() => setLookupCandidates([])}
+                        className="text-slate-500 hover:text-slate-300 text-xs"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                      {lookupCandidates.map((cand) => (
+                        <div
+                          key={cand.id}
+                          className="p-2 rounded bg-slate-900 border border-slate-800 hover:border-indigo-500/70 transition flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-xs text-white font-medium truncate">
+                              {cand.name}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                              {cand.kcal} kcal |{' '}
+                              <span className="text-emerald-400">{cand.p}g P</span> ·{' '}
+                              <span className="text-amber-400">{cand.c}g C</span> ·{' '}
+                              <span className="text-rose-400">{cand.f}g F</span>{' '}
+                              <span className="text-slate-500">/ 100g</span>
+                              {cand.brand && (
+                                <span className="ml-1 text-slate-500">({cand.brand})</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => applyCandidate(cand)}
+                              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-mono whitespace-nowrap"
+                            >
+                              Fill Inputs
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDirectLogCandidate(cand)}
+                              className="px-2 py-1 bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-300 border border-emerald-500/40 rounded text-[10px] font-mono whitespace-nowrap"
+                            >
+                              + Log
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Macro Inputs */}
+                <div className="grid grid-cols-4 gap-2">
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-mono block mb-0.5">
+                      Protein (g)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      placeholder="P (g)"
+                      value={newFoodP}
+                      onChange={(e) => setNewFoodP(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-emerald-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-mono block mb-0.5">
+                      Carbs (g)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      placeholder="C (g)"
+                      value={newFoodC}
+                      onChange={(e) => setNewFoodC(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-amber-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-mono block mb-0.5">
+                      Fat (g)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      placeholder="F (g)"
+                      value={newFoodF}
+                      onChange={(e) => setNewFoodF(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-rose-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-mono block mb-0.5">
+                      Portion (g)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="Grams"
+                      value={newFoodGrams}
+                      onChange={(e) => setNewFoodGrams(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
                 <button
                   type="submit"
-                  className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs rounded transition"
+                  className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs rounded transition flex items-center justify-center gap-1.5"
                 >
-                  + Save & Log Custom Food
+                  <Check className="w-3.5 h-3.5" />
+                  Save & Log Custom Food
                 </button>
               </form>
             </section>
@@ -755,19 +1068,46 @@ export default function App() {
         </div>
       )}
 
-      {/* VIEW: DATA & BACKUP */}
+      {/* VIEW: DATA & SETTINGS */}
       {activeTab === 'data' && (
         <div className="max-w-4xl mx-auto space-y-6">
           <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-6">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <Database className="w-5 h-5 text-indigo-400" />
-                Data Portability & Local Storage
+                Data Portability & Settings
               </h2>
               <p className="text-xs text-slate-400 mt-1">
                 Your meals, daily weigh-ins, and foods are saved securely in your browser&apos;s local storage.
-                Use the controls below to export backups, import data to another device, or preview sample trends.
+                Use the controls below to configure AI macro lookup, export backups, or preview sample trends.
               </p>
+            </div>
+
+            {/* AI Estimation Config Card */}
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex items-center gap-2 text-white font-medium text-sm">
+                <Key className="w-4 h-4 text-amber-400" />
+                Google Gemini API Key (Optional for Complex Recipe Estimation)
+              </div>
+              <p className="text-xs text-slate-400">
+                MacroPulse automatically queries the official <strong>USDA FoodData Central database</strong> with zero setup.
+                If you want AI to estimate multi-ingredient recipes or complex restaurant dishes (e.g., &quot;grandma&apos;s beef brisket with potatoes&quot;), paste a free Gemini API key from Google AI Studio.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  placeholder="Paste Gemini API key (e.g. AIzaSy...)"
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  onClick={() => handleSaveGeminiKey(keyInput)}
+                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-mono transition"
+                >
+                  Save Key
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
