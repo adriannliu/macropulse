@@ -23,6 +23,7 @@ import {
 import { TrendCharts } from './components/TrendCharts';
 import { AIMealModal } from './components/AIMealModal';
 import { AuthModal } from './components/AuthModal';
+import { BarcodeScannerModal } from './components/BarcodeScannerModal';
 import { useAuthSession } from './auth';
 import {
   fetchCloudProfile,
@@ -51,6 +52,7 @@ import {
   Check,
   Utensils,
   Cloud,
+  ScanBarcode,
 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -62,6 +64,7 @@ const CATEGORIES = [
   'Home-Cooked',
   'Produce',
   'Fats',
+  'Packaged',
   'Custom',
 ] as const;
 
@@ -140,6 +143,7 @@ export default function App() {
   );
   const [keyInput, setKeyInput] = useState<string>(geminiKey);
   const [isAIMealModalOpen, setIsAIMealModalOpen] = useState(false);
+  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
 
   // File import ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -385,7 +389,7 @@ export default function App() {
   };
 
   // Direct 1-click log from candidate
-  const handleDirectLogCandidate = (cand: NutritionSearchResult) => {
+  const handleDirectLogCandidate = (cand: NutritionSearchResult, grams = cand.defaultGrams) => {
     const food: FoodItem = {
       id: cand.id,
       name: cand.name,
@@ -402,10 +406,10 @@ export default function App() {
         saveCloudCustomFood(food);
       }
     }
-    addFoodToLog(food, food.defaultGrams);
+    addFoodToLog(food, grams);
     setLookupCandidates([]);
     setNewFoodName('');
-    showNotification(`Logged ${cand.defaultGrams}g of "${cand.name}"`);
+    showNotification(`Logged ${grams}g of "${cand.name}"`);
   };
 
   // Custom food submission
@@ -708,6 +712,13 @@ export default function App() {
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 AI Log Meal
+              </button>
+              <button
+                onClick={() => setIsBarcodeModalOpen(true)}
+                className="px-3 py-1.5 text-xs font-mono font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition flex items-center gap-1.5"
+              >
+                <ScanBarcode className="w-3.5 h-3.5 text-indigo-300" />
+                Scan Barcode
               </button>
               <button
                 onClick={handleAutoBalance}
@@ -1378,6 +1389,16 @@ export default function App() {
         geminiKey={geminiKey}
         onSaveGeminiKey={handleSaveGeminiKey}
         onConfirmLog={handleConfirmAILog}
+      />
+
+      {/* Barcode Scanner (Open Food Facts) Modal */}
+      <BarcodeScannerModal
+        isOpen={isBarcodeModalOpen}
+        onClose={() => setIsBarcodeModalOpen(false)}
+        onConfirmLog={(product, grams) => {
+          handleDirectLogCandidate(product, grams);
+          setIsBarcodeModalOpen(false);
+        }}
       />
 
       {/* AWS Cognito Auth & Cloud Sync Modal */}

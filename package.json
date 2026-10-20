@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@aws-amplify/ui-react": "^6.15.7",
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
     "aws-amplify": "^6.22.2",
     "lucide-react": "^1.59.0",
     "react": "^19.3.1",
