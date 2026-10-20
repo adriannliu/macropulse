@@ -83,25 +83,27 @@ async function directClientGeminiParse(
   apiKey: string,
   defaultMeal: 'breakfast' | 'lunch' | 'dinner' | 'snacks'
 ): Promise<ParsedMealResult> {
-  const prompt = `You are a world-class clinical sports nutritionist and calorie tracking assistant.
+  const prompt = `You are a world-class clinical sports nutritionist, culinary expert, and calorie tracking assistant.
 A user describes what they ate in natural language:
 "${text}"
 
 Your task:
 1. Deconstruct the meal into individual distinct food ingredients/items.
-2. Estimate the realistic total consumed weight in GRAMS for each item based on common serving sizes, household measurements (e.g. "a scoop", "2 eggs", "half an avocado", "a palm-sized steak", "1 bowl"), or explicit weights provided.
-3. Provide the accurate macronutrient density PER 100 GRAMS (Protein "p", Carbohydrates "c", Fat "f") for each item.
-4. Detect the meal category: "breakfast" | "lunch" | "dinner" | "snacks" (if the text specifies "for breakfast" or time of day, otherwise default to "${defaultMeal}").
+2. Estimate the realistic total consumed weight in GRAMS for each item based on common serving sizes, household measurements, or explicit counts (e.g. "2 campari tomatoes" = ~100g total, ~50g each; "2 trader joes hashbrowns" = 2 patties, ~120g total, ~60g each; "a scoop of whey" = 30-35g; "a palm of chicken" = 140g).
+3. If specific grocery brands (e.g. Trader Joe's, Costco/Kirkland, Fairlife, Dave's Killer Bread) or restaurants (e.g. Chipotle, Sweetgreen, In-N-Out) are mentioned, use their exact real-world nutritional profiles.
+4. Provide the accurate macronutrient density PER 100 GRAMS (Protein "p", Carbohydrates "c", Fat "f") for each item.
+5. Detect the meal category: "breakfast" | "lunch" | "dinner" | "snacks" (if the text specifies "for breakfast" or time of day, otherwise default to "${defaultMeal}").
 
-Standard Portions Reference:
-- 1 large egg = ~50g (whole: 12.6g P, 0.7g C, 9.5g F per 100g)
-- 1 slice bread = ~50-60g
-- 1/2 avocado = ~75-80g (edible portion)
-- 1 cup cooked rice = ~180-200g
-- 1 scoop protein powder = ~30-35g
-- 1 tbsp olive oil/butter = ~14g
-- 1 palm of meat/poultry/fish = ~120-160g cooked
-- 1 bowl of soup/noodles = ~300-400g
+Standard Portions & Brand References:
+- 1 Campari tomato = ~50g (100g: 0.9g P, 3.9g C, 0.2g F, 18 kcal)
+- Trader Joe's Hash Brown Patty = ~60g each (100g: 1.7g P, 25.0g C, 13.3g F, 217 kcal)
+- 1 large egg = ~50g (100g: 12.6g P, 0.7g C, 9.5g F)
+- 1 slice sourdough/bread = ~50-60g
+- 1/2 avocado = ~75-80g edible portion (100g: 2.0g P, 8.5g C, 14.7g F)
+- 1 cup cooked jasmine rice = ~180-200g (100g: 2.7g P, 28.2g C, 0.3g F)
+- 1 scoop whey isolate = ~30-35g (100g: 83g P, 3g C, 1.5g F)
+- 1 tbsp olive oil/butter = ~14g (100g: 0g P, 0g C, 100g F)
+- Cooked chicken breast = 100g: 31.0g P, 0.0g C, 3.6g F
 
 Respond ONLY with a valid JSON object matching this schema, no markdown codeblocks, no commentary:
 {
@@ -114,12 +116,12 @@ Respond ONLY with a valid JSON object matching this schema, no markdown codebloc
       "p": 31.0,
       "c": 0.0,
       "f": 3.6,
-      "explanation": "e.g. 1 palm-sized cooked breast"
+      "explanation": "e.g. 2 patties (60g each)"
     }
   ]
 }`;
 
-  const models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  const models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'];
   let lastError: Error | null = null;
   let rawJson: string | null = null;
 

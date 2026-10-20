@@ -116,27 +116,45 @@ Respond ONLY with a valid JSON object in this exact schema:
   "defaultGrams": 150
 }`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${effectiveKey}`;
+    const models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'];
+    let lastError: Error | null = null;
+    let text: string | null = null;
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-        },
-      }),
-    });
+    for (const model of models) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${effectiveKey}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+            },
+          }),
+        });
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini API error: ${err.slice(0, 100)}`);
+        if (res.ok) {
+          const data = await res.json();
+          text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) break;
+        } else {
+          const err = await res.text();
+          lastError = new Error(`Gemini (${model}) ${res.status}: ${err.slice(0, 100)}`);
+          if (res.status === 404) continue;
+          throw lastError;
+        }
+      } catch (e: any) {
+        lastError = e;
+        if (e.message?.includes('400') || e.message?.includes('403') || e.message?.includes('API_KEY')) {
+          throw e;
+        }
+      }
     }
 
-    const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('No response from Gemini API');
+    if (!text) {
+      throw lastError || new Error('No response from Gemini API');
+    }
 
     const parsed = JSON.parse(text);
     const p = Math.max(0, Number(parsed.p) || 0);
