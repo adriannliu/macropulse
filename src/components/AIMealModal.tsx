@@ -57,8 +57,11 @@ export function AIMealModal({
     defaultMeal
   );
 
+  const hasGlobalKey = Boolean((import.meta as any).env?.VITE_GEMINI_API_KEY);
+  const hasKey = Boolean(geminiKey || hasGlobalKey);
+
   // Key configuration
-  const [showKeyInput, setShowKeyInput] = useState(!geminiKey);
+  const [showKeyInput, setShowKeyInput] = useState(!hasKey);
   const [tempKey, setTempKey] = useState(geminiKey);
 
   // Speech Recognition
@@ -237,26 +240,35 @@ export function AIMealModal({
 
         {/* Content Body */}
         <div className="p-5 space-y-5 overflow-y-auto flex-1">
-          {/* API Key Banner / Toggle if user wants full AI */}
-          {(!geminiKey || showKeyInput) && (
+          {/* API Key Banner / Toggle if user wants to change or no key exists */}
+          {!hasKey || showKeyInput ? (
             <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-slate-200 flex items-center gap-1.5">
                   <Key className="w-3.5 h-3.5 text-amber-400" />
-                  Enable Full AI Recipe Reasoning (Google Gemini)
+                  Gemini AI Key Configuration
                 </span>
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-mono text-[11px]"
-                >
-                  Get Free Key <ExternalLink className="w-3 h-3" />
-                </a>
+                {hasKey ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowKeyInput(false)}
+                    className="text-slate-500 hover:text-slate-300 text-[11px] font-mono"
+                  >
+                    Hide
+                  </button>
+                ) : (
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-mono text-[11px]"
+                  >
+                    Get Free Key <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
               </div>
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Paste your free Gemini key to parse complex restaurant meals, slang, and home recipes.
-                Without a key, MacroPulse will use the built-in USDA heuristic parser.
+                Paste your Gemini key for AI meal parsing. You can also configure <code className="text-indigo-300 font-mono">VITE_GEMINI_API_KEY</code> globally in AWS Amplify environment variables.
               </p>
               <div className="flex gap-2 pt-1">
                 <input
@@ -277,6 +289,20 @@ export function AIMealModal({
                   Save Key
                 </button>
               </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-slate-950/80 border border-slate-800/80 text-xs">
+              <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                AI Nutrition Engine Active
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowKeyInput(true)}
+                className="text-[10px] font-mono text-slate-500 hover:text-slate-300 transition"
+              >
+                Change Key
+              </button>
             </div>
           )}
 

@@ -35,7 +35,19 @@ export async function parseMealWithAI(
     throw new Error('Please describe what you ate first.');
   }
 
-  // 1. Try Vercel Serverless Function first (Uses global GEMINI_API_KEY)
+  // Check user key or global project key configured in environment
+  const effectiveKey = (
+    userApiKey ||
+    (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+    ''
+  ).trim();
+
+  // 1. If we have a valid key (either global or user), call Gemini directly
+  if (effectiveKey && effectiveKey.length > 10) {
+    return directClientGeminiParse(cleanPrompt, effectiveKey, defaultMeal);
+  }
+
+  // 2. Try serverless function (if deployed on platform supporting /api routes)
   try {
     const res = await fetch('/api/parse-meal', {
       method: 'POST',
@@ -43,7 +55,6 @@ export async function parseMealWithAI(
       body: JSON.stringify({
         text: cleanPrompt,
         defaultMeal,
-        userKey: userApiKey ? userApiKey.trim() : undefined,
       }),
     });
 
@@ -56,21 +67,9 @@ export async function parseMealWithAI(
           rawText: cleanPrompt,
         };
       }
-    } else {
-      const errData = await res.json().catch(() => ({}));
-      // If server has no key and user provided one, continue to direct client call
-      if (errData.error === 'NO_GLOBAL_KEY' && (!userApiKey || userApiKey.trim().length < 10)) {
-        throw new Error('NO_KEY_CONFIGURED');
-      }
     }
-  } catch (err: any) {
-    if (err.message === 'NO_KEY_CONFIGURED') throw err;
+  } catch (err) {
     console.warn('Serverless /api/parse-meal unavailable, checking client fallback...', err);
-  }
-
-  // 2. Direct client fallback if user provided a key
-  if (userApiKey && userApiKey.trim().length > 10) {
-    return directClientGeminiParse(cleanPrompt, userApiKey.trim(), defaultMeal);
   }
 
   throw new Error('NO_KEY_CONFIGURED');

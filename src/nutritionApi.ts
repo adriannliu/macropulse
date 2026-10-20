@@ -97,15 +97,73 @@ export async function estimateWithGemini(
   apiKey?: string
 ): Promise<NutritionSearchResult> {
   const clean = query.trim();
+  const effectiveKey = (
+    apiKey ||
+    (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+    ''
+  ).trim();
 
-  // 1. Try serverless endpoint with global key
+  // 1. If key is present (global or user provided), use Gemini directly
+  if (effectiveKey && effectiveKey.length > 10) {
+    const prompt = `You are a nutrition database. Provide estimated macronutrients per 100 grams for the food: "${clean}".
+Respond ONLY with a valid JSON object in this exact schema:
+{
+  "name": "Standard food name",
+  "category": "Protein | Carbs | Fats | Home-Cooked | Produce | Dairy & Eggs",
+  "p": 25.0,
+  "c": 0.0,
+  "f": 3.5,
+  "defaultGrams": 150
+}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${effectiveKey}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Gemini API error: ${err.slice(0, 100)}`);
+    }
+
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('No response from Gemini API');
+
+    const parsed = JSON.parse(text);
+    const p = Math.max(0, Number(parsed.p) || 0);
+    const c = Math.max(0, Number(parsed.c) || 0);
+    const f = Math.max(0, Number(parsed.f) || 0);
+    const defaultGrams = Math.max(10, Number(parsed.defaultGrams) || 100);
+
+    return {
+      id: `ai_${Date.now()}`,
+      name: parsed.name || clean,
+      category: parsed.category || 'AI Estimated',
+      p: Math.round(p * 10) / 10,
+      c: Math.round(c * 10) / 10,
+      f: Math.round(f * 10) / 10,
+      kcal: Math.round(calcKcal(p, c, f)),
+      defaultGrams,
+      source: 'ai',
+    };
+  }
+
+  // 2. Try serverless endpoint with global key
   try {
     const res = await fetch('/api/estimate-food', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query: clean,
-        userKey: apiKey ? apiKey.trim() : undefined,
       }),
     });
 
@@ -126,64 +184,10 @@ export async function estimateWithGemini(
       }
     }
   } catch (err) {
-    console.warn('Serverless /api/estimate-food failed, trying direct client...', err);
+    console.warn('Serverless /api/estimate-food failed', err);
   }
 
-  // 2. Direct client fallback
-  if (!apiKey || apiKey.trim().length < 10) {
-    throw new Error('No API key configured for Gemini');
-  }
-
-  const prompt = `You are a nutrition database. Provide estimated macronutrients per 100 grams for the food: "${clean}".
-Respond ONLY with a valid JSON object in this exact schema:
-{
-  "name": "Standard food name",
-  "category": "Protein | Carbs | Fats | Home-Cooked | Produce | Dairy & Eggs",
-  "p": 25.0,
-  "c": 0.0,
-  "f": 3.5,
-  "defaultGrams": 150
-}`;
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey.trim()}`;
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini API error: ${err}`);
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('No response from Gemini API');
-
-  const parsed = JSON.parse(text);
-  const p = Math.max(0, Number(parsed.p) || 0);
-  const c = Math.max(0, Number(parsed.c) || 0);
-  const f = Math.max(0, Number(parsed.f) || 0);
-  const defaultGrams = Math.max(10, Number(parsed.defaultGrams) || 100);
-
-  return {
-    id: `ai_${Date.now()}`,
-    name: parsed.name || clean,
-    category: parsed.category || 'AI Estimated',
-    p: Math.round(p * 10) / 10,
-    c: Math.round(c * 10) / 10,
-    f: Math.round(f * 10) / 10,
-    kcal: Math.round(calcKcal(p, c, f)),
-    defaultGrams,
-    source: 'ai',
-  };
+  throw new Error('No API key configured for Gemini');
 }
 
 /**

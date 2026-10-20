@@ -133,7 +133,10 @@ export default function App() {
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [lookupCandidates, setLookupCandidates] = useState<NutritionSearchResult[]>([]);
   const [geminiKey, setGeminiKey] = useState<string>(
-    () => localStorage.getItem('mp_gemini_key') || ''
+    () =>
+      localStorage.getItem('mp_gemini_key') ||
+      (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+      ''
   );
   const [keyInput, setKeyInput] = useState<string>(geminiKey);
   const [isAIMealModalOpen, setIsAIMealModalOpen] = useState(false);
