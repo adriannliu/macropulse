@@ -231,7 +231,7 @@ export function AIMealModal({
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 AI Natural Language Meal Logger
                 <span className="text-[10px] font-mono bg-indigo-950/80 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded">
-                  {geminiKey ? 'Gemini 1.5 Flash' : 'Smart USDA Engine'}
+                  {hasKey ? 'Gemini Flash' : 'Smart USDA Engine'}
                 </span>
               </h2>
               <p className="text-xs text-slate-400">

@@ -77,29 +77,43 @@ export async function parseMealWithAI(
 
 let cachedModels: string[] | null = null;
 
+// Fast, non-preview text models in order of preference. Pro models are excluded:
+// they always think before answering and take 10s+ for this workload.
+const PREFERRED_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-flash-latest',
+  'gemini-2.5-flash-lite',
+  'gemini-flash-lite-latest',
+];
+
+// Specialised variants that list generateContent but can't return plain JSON text
+const EXCLUDED_MODEL_PATTERN = /tts|image|audio|live|embedding|robotics|computer-use|thinking|exp|preview|learnlm|gemma/;
+
+const MAX_MODEL_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 20000;
+
 /**
- * Dynamically queries Google's API to fetch active, valid models for this specific API key.
- * Prioritizes latest Flash models, then Pro models.
+ * Dynamically queries Google's API for models this key can use, returning at most
+ * MAX_MODEL_ATTEMPTS fast Flash models (known-good IDs first) so failures can't cascade.
  */
 export async function getAvailableGeminiModels(apiKey: string): Promise<string[]> {
   if (cachedModels && cachedModels.length > 0) return cachedModels;
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (res.ok) {
       const data = await res.json();
-      const models: string[] = (data.models || [])
+      const available: string[] = (data.models || [])
         .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
         .map((m: any) => m.name.replace(/^models\//, ''));
 
-      // Sort models: prefer flash, then pro, then newer versions
-      models.sort((a, b) => {
-        const isFlashA = a.includes('flash');
-        const isFlashB = b.includes('flash');
-        if (isFlashA && !isFlashB) return -1;
-        if (!isFlashA && isFlashB) return 1;
-        return b.localeCompare(a);
-      });
+      const preferred = PREFERRED_MODELS.filter((m) => available.includes(m));
+      const otherFlash = available
+        .filter((m) => m.includes('flash') && !EXCLUDED_MODEL_PATTERN.test(m) && !preferred.includes(m))
+        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
 
+      const models = [...preferred, ...otherFlash].slice(0, MAX_MODEL_ATTEMPTS);
       if (models.length > 0) {
         cachedModels = models;
         return models;
@@ -110,7 +124,85 @@ export async function getAvailableGeminiModels(apiKey: string): Promise<string[]
   }
 
   // Safe fallback defaults
-  return ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash'];
+  return PREFERRED_MODELS.slice(0, MAX_MODEL_ATTEMPTS);
+}
+
+type GeminiCallResult =
+  | { ok: true; text: string }
+  | { ok: false; status: number; error: Error };
+
+async function callGeminiModel(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  generationConfig: Record<string, unknown>
+): Promise<GeminiCallResult> {
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }
+    );
+  } catch (e: any) {
+    const error = e?.name === 'TimeoutError' ? new Error(`Gemini (${model}) timed out`) : e;
+    return { ok: false, status: 0, error };
+  }
+
+  if (!res.ok) {
+    const errText = await res.text();
+    return {
+      ok: false,
+      status: res.status,
+      error: new Error(`Gemini (${model}) ${res.status}: ${errText.slice(0, 150)}`),
+    };
+  }
+
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  return text
+    ? { ok: true, text }
+    : { ok: false, status: res.status, error: new Error(`Gemini (${model}) returned an empty response`) };
+}
+
+/**
+ * Sends a prompt to Gemini expecting a JSON response, trying a few fast models in order.
+ */
+export async function generateGeminiJson(
+  apiKey: string,
+  prompt: string,
+  temperature = 0.2
+): Promise<string> {
+  const models = await getAvailableGeminiModels(apiKey);
+  let lastError: Error | null = null;
+
+  for (const model of models) {
+    const baseConfig = { responseMimeType: 'application/json', temperature };
+    // Minimise thinking: these are simple structured lookups and thinking adds 5-30s.
+    // 2.5 models take a token budget; 3.x models take a level.
+    const thinkingConfig = model.startsWith('gemini-2.5')
+      ? { thinkingBudget: 0 }
+      : { thinkingLevel: 'low' };
+
+    let result = await callGeminiModel(apiKey, model, prompt, { ...baseConfig, thinkingConfig });
+    // Older models reject thinkingConfig entirely; retry once without it
+    if (!result.ok && result.status === 400 && /thinking/i.test(result.error.message)) {
+      result = await callGeminiModel(apiKey, model, prompt, baseConfig);
+    }
+
+    if (result.ok) return result.text;
+    lastError = result.error;
+    // Invalid / unauthorised key won't be fixed by another model
+    if (result.status === 401 || result.status === 403) {
+      throw lastError;
+    }
+  }
+
+  throw lastError || new Error('Empty response from AI. Please try again.');
 }
 
 /**
@@ -159,53 +251,7 @@ Respond ONLY with a valid JSON object matching this schema, no markdown codebloc
   ]
 }`;
 
-  const availableModels = await getAvailableGeminiModels(apiKey);
-  let lastError: Error | null = null;
-  let rawJson: string | null = null;
-
-  for (const model of availableModels) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.2,
-          },
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (rawJson) break;
-      } else {
-        const errText = await res.text();
-        const err = new Error(`Gemini (${model}) ${res.status}: ${errText.slice(0, 150)}`);
-        if (res.status === 404) {
-          lastError = err;
-          continue;
-        }
-        throw err;
-      }
-    } catch (e: any) {
-      lastError = e;
-      if (
-        e.message?.includes('400') ||
-        e.message?.includes('403') ||
-        e.message?.includes('API_KEY')
-      ) {
-        throw e;
-      }
-    }
-  }
-
-  if (!rawJson) {
-    throw lastError || new Error('Empty response from AI. Please try again.');
-  }
+  const rawJson = await generateGeminiJson(apiKey, prompt);
 
   const parsed = JSON.parse(rawJson);
   const items: ParsedItem[] = (parsed.items || []).map((it: any, idx: number) => {
