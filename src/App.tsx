@@ -398,6 +398,9 @@ export default function App() {
     // Save to user custom library if not exists
     if (!foods.some((f) => f.name.toLowerCase() === cand.name.toLowerCase())) {
       setFoods((prev) => [food, ...prev]);
+      if (isAuthenticated) {
+        saveCloudCustomFood(food);
+      }
     }
     addFoodToLog(food, food.defaultGrams);
     setLookupCandidates([]);
