@@ -1,0 +1,305 @@
+# ==============================================================================
+# MACROPULSE — SYSTEM HANDOFF & TECHNICAL SPECIFICATION
+# ==============================================================================
+# Document Version: 1.0.0
+# Last Updated: 2026-10-20
+# Author/Maintainer: Engineering Team (Pair Programmed with Antigravity AI)
+# Repository: git@github.com:adriannliu/macropulse.git
+# Production Branch: main
+# Production URL: https://main.d82rs2p556c3r.amplifyapp.com
+# Target Infrastructure: AWS Amplify Gen 2 (AWS Cognito, Amazon DynamoDB, CloudFront)
+# ==============================================================================
+
+metadata:
+  project_name: "macropulse"
+  display_name: "MacroPulse — Precision Nutrition & Automated Metabolic Engine"
+  version: "2.3.0"
+  description: >
+    A full-stack, cloud-synchronized nutrition tracker and metabolic math engine.
+    Features natural language AI meal parsing, Cramer's Rule 3x3 macro deficit balancing,
+    USDA FoodData Central discovery, AWS Cognito authentication, and per-user Amazon
+    DynamoDB synchronization.
+  funding_budget: "$10,000 AWS Cloud Credits Active"
+
+system_architecture:
+  frontend:
+    framework: "React 19.3.1 (TypeScript ~7.0.2)"
+    bundler: "Vite 8.3.4 (with custom define and environment loaders)"
+    styling: "Tailwind CSS v3.4.19 + PostCSS + Autoprefixer"
+    icons: "Lucide React (v1.59.0)"
+    linting: "Oxlint (v1.88.0)"
+    build_output_directory: "dist"
+  backend_and_cloud:
+    architecture: "AWS Amplify Gen 2 (Code-First AWS CDK)"
+    hosting_cdn: "Amazon CloudFront + AWS Amplify Hosting"
+    authentication:
+      service: "AWS Cognito User Pool"
+      auth_mechanisms:
+        - "Email + Password (with automated 6-digit confirmation codes)"
+        - "Google OAuth (conditional activation via GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET)"
+      session_management: "aws-amplify/auth (useAuthSession custom hook)"
+    database:
+      service: "Amazon DynamoDB (provisioned via Amplify Gen 2 defineData)"
+      authorization_mode: "userPool (Cognito Owner-Based Row-Level Security: allow.owner())"
+      models:
+        - name: "UserProfile"
+          fields: "sex, weightKg, heightCm, age, activity, goalDelta"
+          security: "allow.owner()"
+        - name: "DailyLog"
+          fields: "date, weightKg, targetKcal, targetP, targetC, targetF, itemsJson, notes"
+          security: "allow.owner()"
+        - name: "CustomFood"
+          fields: "name, category, p, c, f, defaultGrams"
+          security: "allow.owner()"
+    local_persistence:
+      strategy: "Offline-First Dual Cache"
+      storage_engine: "localStorage (mp_profile_v1, mp_history_v1, mp_foods, mp_gemini_key)"
+      behavior: >
+        Operates fully functional offline or in guest mode. When authenticated, automatically
+        merges with and persists back to DynamoDB in the background.
+  ai_and_nutrition_services:
+    primary_ai_engine:
+      provider: "Google Generative AI (Gemini REST API v1beta)"
+      model_discovery_strategy: "Dynamic Runtime Discovery via GET /v1beta/models"
+      preferred_model_tier: "Gemini 2.5 Flash -> Gemini 2.5 Pro -> Gemini 3.x Flash"
+      capabilities:
+        - "Natural language meal deconstruction into distinct food items"
+        - "Realistic portion estimation in grams from household measures (eggs, slices, scoops, bowls, palms)"
+        - "Brand recognition (Trader Joe's, Costco/Kirkland, Fairlife, Chipotle, etc.)"
+        - "Exact macronutrient density calculation per 100g (P, C, F, Kcal)"
+      voice_dictation: "Web Speech API (webkitSpeechRecognition) with live text-stream transcription"
+    secondary_database_fallback:
+      provider: "USDA FoodData Central API (api.nal.usda.gov/fdc/v1/foods/search)"
+      purpose: "Official government nutritional facts lookup per 100g serving"
+
+completed_milestones:
+  - id: "M1_CORE_MATH_ENGINE"
+    title: "Exact Metabolic Math & 3x3 Cramer's Rule Solver"
+    file: "src/mathEngine.ts"
+    summary: >
+      Implemented Mifflin-St Jeor BMR & TDEE formulas, Atwater 4-4-9 calorie exact calculation,
+      and a 3x3 linear matrix determinant solver (Cramer's Rule) to calculate the exact gram
+      quantities of 3 user-selected anchor foods required to hit daily macro targets with zero error.
+
+  - id: "M2_EXPANDED_FOOD_LIBRARY"
+    title: "65+ Item Categorized Food Database"
+    file: "src/foodDb.ts"
+    summary: >
+      Constructed an expanded built-in database covering Proteins, Seafood, Dairy & Eggs,
+      Carbohydrates, Home-Cooked dishes, Produce, and Healthy Fats, with exact macronutrient
+      densities per 100g and default serving sizes.
+
+  - id: "M3_TREND_ANALYTICS"
+    title: "Historical Trends & Rolling Metrics"
+    file: "src/components/TrendCharts.tsx"
+    summary: >
+      Engineered custom SVG timeline graphs for weight trajectories, calorie deficit trends,
+      macro breakdowns, and 7-day rolling adherence averages. Included JSON backup export/import
+      and demo history generator.
+
+  - id: "M4_AI_MEAL_LOGGER"
+    title: "Natural Language Meal Parser & Speech Recognition"
+    files:
+      - "src/aiMealParser.ts"
+      - "src/components/AIMealModal.tsx"
+    summary: >
+      Built a modal supporting freeform voice dictation and typed meal descriptions.
+      Features interactive portion sliders, nutrient preview tags, and automatic food library
+      expansion upon confirmation.
+
+  - id: "M5_AWS_AMPLIFY_GEN2_MIGRATION"
+    title: "AWS Backend Provisioning & Cognito Authentication"
+    files:
+      - "amplify/backend.ts"
+      - "amplify/auth/resource.ts"
+      - "amplify/data/resource.ts"
+      - "src/auth.ts"
+      - "src/components/AuthModal.tsx"
+    summary: >
+      Migrated application infrastructure to AWS Amplify Gen 2 to utilize $10,000 in AWS credits.
+      Created Cognito User Pool with email verification codes and optional Google OAuth.
+      Built responsive AuthModal supporting Sign In, Sign Up, Confirmation Codes, and Guest Mode.
+
+  - id: "M6_DYNAMODB_CLOUD_SYNC"
+    title: "Two-Way Cloud Data Synchronization"
+    files:
+      - "src/cloudSync.ts"
+      - "src/App.tsx"
+    summary: >
+      Implemented automated two-way synchronization between client state and Amazon DynamoDB.
+      Synchronizes user biometrics (UserProfile), daily meal logs (DailyLog), and custom foods
+      (CustomFood) under owner-based row-level security. Added live cloud sync indicator to header.
+
+  - id: "M7_DYNAMIC_AI_DISCOVERY"
+    title: "Dynamic Model Discovery & Global Key Injection"
+    files:
+      - "vite.config.ts"
+      - "amplify.yml"
+      - "src/aiMealParser.ts"
+      - "src/nutritionApi.ts"
+    summary: >
+      Bridged AWS Amplify container environment variables into Vite's build bundle.
+      Replaced hardcoded deprecated Gemini model strings with dynamic GET /v1beta/models queries,
+      eliminating 404 deprecation crashes and ensuring seamless global API key usage for all users.
+
+resolved_technical_challenges:
+  - issue: "npm Arborist Crash: Cannot read properties of null (reading 'edgesOut')"
+    root_cause: >
+      Stray package.json and package-lock.json files in the parent home directory (/Users/24adrianl)
+      confused npm's Arborist resolver into constructing broken workspace trees.
+    resolution: >
+      Switched project package management to pnpm, removed corrupted local lockfiles,
+      and isolated dependencies.
+
+  - issue: "Corepack CI Crash: Cannot find module '.../pnpm/12.14.0/bin/pnpm.cjs'"
+    root_cause: >
+      AWS Amplify's build image uses an older Corepack version that looked for bin/pnpm.cjs,
+      which was restructured in pnpm 12.
+    resolution: >
+      Bypassed Corepack in amplify.yml by running npm install -g pnpm@9, pinned pnpm@9.15.4
+      in package.json, and added node-linker=hoisted to .npmrc.
+
+  - issue: "Vite Environment Variable Blank in Production Bundle"
+    root_cause: >
+      Variables defined in AWS Amplify Hosting Console were kept in the container environment
+      and not written to a .env file prior to vite build, causing import.meta.env to be empty.
+    resolution: >
+      Added 'env | grep -E "^(VITE_|GEMINI_)" >> .env || true' directly in amplify.yml before
+      the build phase, and configured vite.config.ts to load both VITE_GEMINI_API_KEY and GEMINI_API_KEY.
+
+  - issue: "Gemini 404 Error: models/gemini-2.0-flash is no longer available"
+    root_cause: >
+      Google retired gemini-2.0-flash from the public endpoint in favor of newer 2.5/3.x models,
+      causing hardcoded model strings to fail.
+    resolution: >
+      Implemented getAvailableGeminiModels(apiKey) to dynamically query the official Google
+      /v1beta/models endpoint, filter by supportedGenerationMethods: ["generateContent"],
+      and prioritize active Flash models.
+
+  - issue: "Silent Fallback Hijacking User Inputs with Canned Tomato Soup & Pickles"
+    root_cause: >
+      When the AI parser caught an error, it silently fell back to an offline USDA keyword search,
+      matching 'tomatoes' and 'trader joes' to random canned products.
+    resolution: >
+      Decoupled AI errors from USDA heuristic search, ensuring explicit error messages are
+      displayed and users have manual control over offline searches.
+
+environment_configuration:
+  required_variables:
+    - name: "VITE_GEMINI_API_KEY"
+      alternative_name: "GEMINI_API_KEY"
+      location: "AWS Amplify Console -> App settings -> Environment variables"
+      purpose: "Powers natural language meal parsing and USDA/AI nutrition discovery globally for all users."
+      format: "AIzaSy..."
+  optional_variables:
+    - name: "GOOGLE_CLIENT_ID"
+      location: "AWS Amplify Console -> App settings -> Environment variables"
+      purpose: "Enables Google One-Click OAuth sign-in inside AWS Cognito User Pool."
+    - name: "GOOGLE_CLIENT_SECRET"
+      location: "AWS Amplify Console -> App settings -> Environment variables"
+      purpose: "Google OAuth client secret corresponding to the Web Client ID."
+  local_development:
+    file: ".env.local"
+    content_template: |
+      VITE_GEMINI_API_KEY=your_gemini_api_key_here
+      # Optional local OAuth credentials
+      # GOOGLE_CLIENT_ID=
+      # GOOGLE_CLIENT_SECRET=
+
+key_files_reference:
+  backend_and_infrastructure:
+    - path: "amplify/backend.ts"
+      role: "Entrypoint synthesizing AWS Cognito Auth and DynamoDB Data resources."
+    - path: "amplify/auth/resource.ts"
+      role: "AWS Cognito User Pool configuration (Email/Password + conditional Google OAuth)."
+    - path: "amplify/data/resource.ts"
+      role: "DynamoDB schema definition (UserProfile, DailyLog, CustomFood) with owner security."
+    - path: "amplify.yml"
+      role: "AWS Amplify build pipeline specification (pnpm setup, env injection, Vite build)."
+    - path: "amplify_outputs.json"
+      role: "Generated AWS configuration manifest injected at build time by Amplify Hosting."
+
+  frontend_application:
+    - path: "src/App.tsx"
+      role: "Main dashboard, layout orchestration, date navigation, and state coordination."
+    - path: "src/auth.ts"
+      role: "AWS Amplify client authentication wrapper and useAuthSession React hook."
+    - path: "src/cloudSync.ts"
+      role: "DynamoDB CRUD client for user profiles, daily logs, and custom foods."
+    - path: "src/aiMealParser.ts"
+      role: "Gemini API integration, dynamic model discovery, and natural language parser."
+    - path: "src/nutritionApi.ts"
+      role: "USDA FoodData Central and Gemini multi-model nutritional lookup."
+    - path: "src/mathEngine.ts"
+      role: "BMR/TDEE calculations, Atwater formula, and Cramer's Rule matrix solver."
+    - path: "src/storage.ts"
+      role: "Offline-first localStorage persistence, data normalization, and backup import/export."
+    - path: "src/foodDb.ts"
+      role: "Built-in database of 65+ foundational food items and macro ratios."
+    - path: "src/components/AuthModal.tsx"
+      role: "Authentication modal supporting Sign In, Sign Up, Email Verification, and Guest Mode."
+    - path: "src/components/AIMealModal.tsx"
+      role: "Voice dictation & natural language meal parsing modal with portion adjustments."
+    - path: "src/components/TrendCharts.tsx"
+      role: "Timeline analytics, SVG weight and caloric graphs, and rolling adherence averages."
+
+actionable_next_steps:
+  short_term_priorities:
+    - priority: "P0"
+      task: "Google OAuth Production Activation"
+      description: >
+        Create a Web Client ID in Google Cloud Console with Authorized Redirect URI set to
+        'https://main.d82rs2p556c3r.amplifyapp.com/'. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+        in AWS Amplify Console environment variables.
+      effort: "15 minutes"
+
+    - priority: "P1"
+      task: "Local Backend Sync (amplify_outputs.json)"
+      description: >
+        Run 'npx ampx generate outputs --app-id d82rs2p556c3r --branch main' locally so that
+        'npm run dev' on localhost:5173 can authenticate directly against the live AWS Cognito pool.
+      effort: "5 minutes"
+
+    - priority: "P1"
+      task: "Barcode Scanner Integration"
+      description: >
+        Integrate a lightweight browser barcode scanner (e.g. '@zxing/library' or 'html5-qrcode')
+        to query packaged foods from Open Food Facts API (world.openfoodfacts.org).
+      effort: "1 to 2 days"
+
+  medium_term_enhancements:
+    - priority: "P2"
+      task: "Multimodal AI Meal Photo Logging"
+      description: >
+        Allow users to snap a photo or upload an image of their meal. Pass the image buffer
+        directly to Gemini 2.5 Flash via inlineData parts for instant visual food identification.
+      effort: "2 to 3 days"
+
+    - priority: "P2"
+      task: "Custom Domain & SSL Mapping"
+      description: >
+        Link a custom domain (e.g., 'macropulse.app' or 'macropulse.io') through AWS Amplify
+        Domain Management to automatically issue an Amazon Route 53 / CloudFront SSL certificate.
+      effort: "30 minutes"
+
+    - priority: "P2"
+      task: "Periodic Micronutrient & Water Tracking"
+      description: >
+        Expand DayRecord model in DynamoDB to track hydration (ml of water), sodium, potassium,
+        and fiber alongside core macronutrients.
+      effort: "2 days"
+
+  long_term_roadmap:
+    - priority: "P3"
+      task: "Wearable Device Integration"
+      description: >
+        Connect Apple HealthKit (via PWA or native wrapper) and Whoop/Oura API to automatically
+        read daily Active Calorie Burn and dynamically adjust the Mifflin-St Jeor TDEE target.
+      effort: "1 to 2 weeks"
+
+    - priority: "P3"
+      task: "AI Macro Coach & Weekly Adherence Insights"
+      description: >
+        Build an automated Sunday night report powered by Gemini that reviews the past 7 days of
+        DynamoDB logs, analyzes weight velocity vs. calorie surplus/deficit, and recommends calorie adjustments.
+      effort: "1 week"
