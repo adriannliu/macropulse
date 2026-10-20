@@ -131,25 +131,34 @@ export function AIMealModal({
     setErrorMsg(null);
 
     try {
-      // 1. Try AI parse (queries serverless /api/parse-meal with global key, or client key)
-      try {
-        const result = await parseMealWithAI(query, geminiKey, defaultMeal);
-        setParsedItems(result.items);
-        setTargetMeal(result.meal);
-        return;
-      } catch (aiErr: any) {
-        if (aiErr.message !== 'NO_KEY_CONFIGURED') {
-          console.warn('AI error, falling back to USDA heuristic', aiErr);
-        }
+      // 1. Try Gemini AI parse
+      const result = await parseMealWithAI(query, geminiKey, defaultMeal);
+      setParsedItems(result.items);
+      setTargetMeal(result.meal);
+    } catch (err: any) {
+      console.error('AI parse error:', err);
+      if (err.message === 'NO_KEY_CONFIGURED') {
+        setErrorMsg('No Gemini API key is currently active. Please paste your key in the box above.');
+        setShowKeyInput(true);
+      } else {
+        setErrorMsg(err.message || 'Failed to parse meal with AI. Please check your key.');
       }
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-      // 2. Fallback to USDA / offline parser
+  const handleOfflineFallback = async () => {
+    const query = inputText.trim();
+    if (!query) return;
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
       const result = await parseMealOffline(query, defaultMeal, foodLibrary);
       setParsedItems(result.items);
       setTargetMeal(result.meal);
     } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.message || 'Failed to parse meal. Please try again.');
+      setErrorMsg(err.message || 'Offline parse failed.');
     } finally {
       setIsLoading(false);
     }
@@ -356,8 +365,15 @@ export function AIMealModal({
             )}
 
             {errorMsg && (
-              <div className="text-xs font-mono text-rose-400 bg-rose-950/40 border border-rose-800/60 p-2.5 rounded-lg">
-                {errorMsg}
+              <div className="text-xs font-mono text-rose-400 bg-rose-950/40 border border-rose-800/60 p-2.5 rounded-lg flex flex-col gap-1.5">
+                <span>{errorMsg}</span>
+                <button
+                  type="button"
+                  onClick={handleOfflineFallback}
+                  className="text-[11px] text-slate-300 hover:text-white underline text-left"
+                >
+                  Or search built-in &amp; USDA database without AI →
+                </button>
               </div>
             )}
           </div>

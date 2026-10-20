@@ -119,29 +119,52 @@ Respond ONLY with a valid JSON object matching this schema, no markdown codebloc
   ]
 }`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  let lastError: Error | null = null;
+  let rawJson: string | null = null;
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-      },
-    }),
-  });
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.2,
+          },
+        }),
+      });
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Gemini API error (${res.status}): ${errorText.slice(0, 100)}`);
+      if (res.ok) {
+        const data = await res.json();
+        rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJson) break;
+      } else {
+        const errText = await res.text();
+        const err = new Error(`Gemini (${model}) ${res.status}: ${errText.slice(0, 150)}`);
+        if (res.status === 404) {
+          lastError = err;
+          continue;
+        }
+        throw err;
+      }
+    } catch (e: any) {
+      lastError = e;
+      if (
+        e.message?.includes('400') ||
+        e.message?.includes('403') ||
+        e.message?.includes('API_KEY')
+      ) {
+        throw e;
+      }
+    }
   }
 
-  const data = await res.json();
-  const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawJson) {
-    throw new Error('Empty response from AI. Please try again.');
+    throw lastError || new Error('Empty response from AI. Please try again.');
   }
 
   const parsed = JSON.parse(rawJson);
