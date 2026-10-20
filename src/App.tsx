@@ -24,6 +24,14 @@ import { TrendCharts } from './components/TrendCharts';
 import { AIMealModal } from './components/AIMealModal';
 import { AuthModal } from './components/AuthModal';
 import { useAuthSession } from './auth';
+import {
+  fetchCloudProfile,
+  saveCloudProfile,
+  fetchCloudDailyLogs,
+  saveCloudDailyLog,
+  fetchCloudCustomFoods,
+  saveCloudCustomFood,
+} from './cloudSync';
 import { smartDiscoverMacros, type NutritionSearchResult } from './nutritionApi';
 import {
   Calendar,
@@ -134,15 +142,78 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
+  // Cloud Sync state & IDs
+  const [cloudProfileId, setCloudProfileId] = useState<string | null>(null);
+  const cloudLogIds = useRef<Record<string, string>>({});
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+
   const showNotification = (msg: string) => {
     setNotification(msg);
     setTimeout(() => setNotification(null), 3800);
   };
 
-  // Sync profile to localStorage
+  // Two-way AWS Cloud Sync when user is authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let isMounted = true;
+
+    async function initialSync() {
+      setIsCloudSyncing(true);
+      try {
+        // 1. Fetch remote user profile
+        const cloudP = await fetchCloudProfile();
+        if (cloudP && isMounted) {
+          setCloudProfileId(cloudP.id);
+          setProfile(cloudP.profile);
+        } else if (!cloudP) {
+          const newId = await saveCloudProfile(profile);
+          if (newId && isMounted) setCloudProfileId(newId);
+        }
+
+        // 2. Fetch remote daily logs
+        const cloudLogs = await fetchCloudDailyLogs();
+        if (cloudLogs && Object.keys(cloudLogs).length > 0 && isMounted) {
+          const merged: HistoryStore = { ...history };
+          for (const [d, entry] of Object.entries(cloudLogs)) {
+            cloudLogIds.current[d] = entry.id;
+            merged[d] = entry.record;
+          }
+          setHistory(merged);
+          saveHistory(merged);
+        }
+
+        // 3. Fetch remote custom foods
+        const cloudFoods = await fetchCloudCustomFoods();
+        if (cloudFoods && cloudFoods.length > 0 && isMounted) {
+          setFoods((prev) => {
+            const existingNames = new Set(prev.map((f) => f.name.toLowerCase()));
+            const toAdd = cloudFoods.filter((f) => !existingNames.has(f.name.toLowerCase()));
+            return [...toAdd, ...prev];
+          });
+        }
+        showNotification('AWS Cloud Sync Active');
+      } catch (err) {
+        console.warn('Initial cloud sync error', err);
+      } finally {
+        if (isMounted) setIsCloudSyncing(false);
+      }
+    }
+
+    initialSync();
+    return () => {
+      isMounted = false;
+    };
+  }, [isAuthenticated]);
+
+  // Sync profile to localStorage & AWS DynamoDB
   useEffect(() => {
     saveProfile(profile);
-  }, [profile]);
+    if (isAuthenticated) {
+      saveCloudProfile(profile, cloudProfileId || undefined).then((id) => {
+        if (id && !cloudProfileId) setCloudProfileId(id);
+      });
+    }
+  }, [profile, isAuthenticated, cloudProfileId]);
 
   // Sync foods to localStorage
   useEffect(() => {
@@ -226,6 +297,13 @@ export default function App() {
       };
       const nextStore = { ...prev, [activeDate]: updated };
       saveHistory(nextStore);
+
+      if (isAuthenticated) {
+        saveCloudDailyLog(updated, cloudLogIds.current[activeDate]).then((id) => {
+          if (id) cloudLogIds.current[activeDate] = id;
+        });
+      }
+
       return nextStore;
     });
   };
@@ -338,6 +416,9 @@ export default function App() {
       defaultGrams: Number(newFoodGrams) || 100,
     };
     setFoods((prev) => [custom, ...prev]);
+    if (isAuthenticated) {
+      saveCloudCustomFood(custom);
+    }
     addFoodToLog(custom, custom.defaultGrams);
     setNewFoodName('');
     setNewFoodP('');
@@ -353,6 +434,9 @@ export default function App() {
     setFoods((prev) => {
       const existingNames = new Set(prev.map((f) => f.name.toLowerCase()));
       const toAdd = newFoods.filter((f) => !existingNames.has(f.name.toLowerCase()));
+      if (isAuthenticated && toAdd.length > 0) {
+        toAdd.forEach((f) => saveCloudCustomFood(f));
+      }
       return [...toAdd, ...prev];
     });
 
@@ -489,7 +573,11 @@ export default function App() {
         <div className="flex items-center gap-2">
           {isAuthenticated ? (
             <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg">
-              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              {isCloudSyncing ? (
+                <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+              ) : (
+                <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+              )}
               <span className="text-xs font-mono text-slate-300 truncate max-w-[130px]" title={userEmail || 'Account'}>
                 {userEmail || 'Account'}
               </span>
