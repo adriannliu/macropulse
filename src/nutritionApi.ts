@@ -1,6 +1,7 @@
 import type { FoodItem } from './mathEngine';
 import { DEFAULT_FOODS } from './foodDb';
 import { calcKcal } from './mathEngine';
+import { getAvailableGeminiModels } from './aiMealParser';
 
 export interface NutritionSearchResult {
   id: string;
@@ -116,7 +117,7 @@ Respond ONLY with a valid JSON object in this exact schema:
   "defaultGrams": 150
 }`;
 
-    const models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'];
+    const models = await getAvailableGeminiModels(effectiveKey);
     let lastError: Error | null = null;
     let text: string | null = null;
 

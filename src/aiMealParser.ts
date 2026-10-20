@@ -75,6 +75,44 @@ export async function parseMealWithAI(
   throw new Error('NO_KEY_CONFIGURED');
 }
 
+let cachedModels: string[] | null = null;
+
+/**
+ * Dynamically queries Google's API to fetch active, valid models for this specific API key.
+ * Prioritizes latest Flash models, then Pro models.
+ */
+export async function getAvailableGeminiModels(apiKey: string): Promise<string[]> {
+  if (cachedModels && cachedModels.length > 0) return cachedModels;
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (res.ok) {
+      const data = await res.json();
+      const models: string[] = (data.models || [])
+        .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+        .map((m: any) => m.name.replace(/^models\//, ''));
+
+      // Sort models: prefer flash, then pro, then newer versions
+      models.sort((a, b) => {
+        const isFlashA = a.includes('flash');
+        const isFlashB = b.includes('flash');
+        if (isFlashA && !isFlashB) return -1;
+        if (!isFlashA && isFlashB) return 1;
+        return b.localeCompare(a);
+      });
+
+      if (models.length > 0) {
+        cachedModels = models;
+        return models;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to dynamically list models', e);
+  }
+
+  // Safe fallback defaults
+  return ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash'];
+}
+
 /**
  * Direct client-side Gemini fallback
  */
@@ -121,11 +159,11 @@ Respond ONLY with a valid JSON object matching this schema, no markdown codebloc
   ]
 }`;
 
-  const models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'];
+  const availableModels = await getAvailableGeminiModels(apiKey);
   let lastError: Error | null = null;
   let rawJson: string | null = null;
 
-  for (const model of models) {
+  for (const model of availableModels) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
